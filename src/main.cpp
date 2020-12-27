@@ -12,6 +12,8 @@ IPAddress gateway(192,168, 0, 1);
 IPAddress DNS(192, 168, 0, 1);
 
 char packetBuffer[255];
+char payloadBuffer[255];
+
 static const int remoteUdpPort = 9000;
 
 SoftwareSerial mySerial(5, 4); // RX, TX
@@ -55,11 +57,26 @@ void loop() {
   // リクエストデータの処理
   Serial.println("packet received!");
   IPAddress remoteUdpIp = wifiUdp.remoteIP();
+  
+  Serial.print("ip from: ");
   Serial.println(remoteUdpIp);
+  Serial.print("port from: ");
   Serial.println(wifiUdp.remotePort());
-  int len = wifiUdp.read(packetBuffer, packetSize);
-  if (len > 0) packetBuffer[len] = '\0';
-  Serial.println(packetBuffer);
+  Serial.print("packetSize[byte]: ");
+  Serial.println(packetSize);
+  memset(packetBuffer, 0, sizeof(packetBuffer));
+  int bufferSize = wifiUdp.read(packetBuffer, 255);
+  Serial.print("bufferSize: ");
+  Serial.println(bufferSize);
+
+  // パケットのUDPデータ部分を表示
+  for(int i=0;i<bufferSize;i++){
+    uint8_t data = packetBuffer[i];
+    Serial.print(data, HEX);
+    Serial.print(" ");
+  }
+
+  Serial.println("");
 
   // 送信データの処理
   wifiUdp.beginPacket(remoteUdpIp, remoteUdpPort);
