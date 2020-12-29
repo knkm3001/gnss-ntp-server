@@ -3,6 +3,7 @@
 #include <WiFiUDP.h>
 #include <time.h>
 #include <Arduino.h>
+#include <string>
 #include "wifiConfig.h"
 
 #define JST 3600*9
@@ -13,15 +14,17 @@ IPAddress subnet(255, 255, 255, 0);
 IPAddress gateway(192,168, 0, 1);
 IPAddress DNS(192, 168, 0, 1);
 
-char packetBuffer[127];
-int8_t payloadBuffer[127];
-
-static const int remoteUdpPort = 9000;
-
-static const long NtpUnixTimeDelta = 2208988800;
-time_t referenceTimestamp;
-
 SoftwareSerial mySerial(5, 4); // RX, TX
+
+static const int NtpPort = 123;
+static const double NtpUnixTimeDelta = 2208988800.0; // NTP Time と Unix Time の差(70年)
+
+time_t referenceTimestamp;
+char reqPacketBuffer[48];
+int8_t resPacketBuffer[48];
+
+double calcUnixTime();
+void createResPacket(double);
  
 void setup() {
   Serial.begin(57600);
@@ -49,20 +52,21 @@ void setup() {
   mySerial.begin(9600);
 
 
-  configTzTime("JST-9", "133.243.238.244","ntp.nict.jp", "ntp.jst.mfeed.ad.jp");
+  configTzTime("JST-9", "133.243.238.244", "210.173.160.27");
+  // DNSが機能しない？
+  // 133.243.238.244: ntp.nict.jp
+  // 210.173.160.27 : ntp1.jst.mfeed.ad.jp
+  // 216.239.35.0   : time1.google.com.ntp
   
   Serial.print("NTP sync ");
   for(int i = 0; i < 10; i++) {
-      delay(500);
-      Serial.print(".");
+      delay(100);
   }
   Serial.println("");
 
   referenceTimestamp = time(NULL);
   Serial.print("referenceTimestamp: ");
   Serial.println((long)referenceTimestamp);
-  
-
   struct tm *tm = localtime(&referenceTimestamp);
   String jstDateTime = ""; 
   jstDateTime += String(tm->tm_year+1900)+"/";
@@ -73,129 +77,216 @@ void setup() {
   jstDateTime += (String(tm->tm_sec).length()   ==1 ? "0"+String(tm->tm_sec)   : String(tm->tm_sec));
   Serial.print(jstDateTime);
   Serial.println(" JST");
-  
   Serial.println("");
 
-  static const int localPort = 123; //ntp port no.
-  wifiUdp.begin(localPort);
+  wifiUdp.begin(NtpPort);
 
   }
 
+
+
 void loop() {
-  int packetSize = wifiUdp.parsePacket();
-  if (packetSize==0) {
-    delay(100);
+  int reqPacketSize = wifiUdp.parsePacket();
+  if (reqPacketSize==0) {
+    delay(10);
     return; 
   }
 
   // リクエストデータの表示
-  Serial.println("packet received!");
-  time_t receivedTimestamp = time(NULL);
+  Serial.println("reqPacket received!");
+  double receivedTimeStamp = time(NULL);
   Serial.print("receivedTimestamp: ");
-  Serial.println((long)receivedTimestamp);
+  Serial.println(receivedTimeStamp);
 
   IPAddress remoteUdpIp = wifiUdp.remoteIP();
   Serial.print("ip from: ");
   Serial.println(remoteUdpIp);
   Serial.print("port from: ");
   Serial.println(wifiUdp.remotePort());
-  Serial.print("packetSize[byte]: ");
-  Serial.println(packetSize);
-  memset(packetBuffer, 0, sizeof(packetBuffer));
-  int bufferSize = wifiUdp.read(packetBuffer, 255);
+  Serial.print("reqPacketSize[byte]: ");
+  Serial.println(reqPacketSize);
+  memset(reqPacketBuffer, 0, sizeof(reqPacketBuffer));
+  int bufferSize = wifiUdp.read(reqPacketBuffer, 255);
   Serial.print("bufferSize: ");
   Serial.println(bufferSize);
 
   // パケットのUDPデータ部分を表示
-  Serial.print("packet payload: ");
+  Serial.print("reqPacket resPacket: ");
   for(int i=0;i<bufferSize;i++){
-    uint8_t data = packetBuffer[i];
+    uint8_t data = reqPacketBuffer[i];
     Serial.print(data, HEX);
     Serial.print(" ");
   }
   Serial.println("");
 
-  memset(payloadBuffer, 0, sizeof(payloadBuffer));
+  createResPacket(receivedTimeStamp);
 
+  // 送信データの処理
+  wifiUdp.beginPacket(remoteUdpIp, wifiUdp.remotePort());
 
-  // 0th byte (LI, VN, Mode)
-  uint8_t packetFirstByte = packetBuffer[0];
-  int vn = (packetFirstByte >> 3) & 7; // Version Number の取得(3~4bit)
-  int li = 0;   // 0で固定 (0~1bit)
-  int mode = 4; // 4で固定 (5~7bit)
-  payloadBuffer[0] = uint8_t(li+(vn<<3)+mode);
-
-  // 1st byte (Stratum)
-  payloadBuffer[1] = uint8_t(1);
-
-  // 2nd byte (Polling)
-  payloadBuffer[2] = uint8_t(6);
-
-  // 3rd byte (Precision)
-  payloadBuffer[2] = int8_t(-12);
-
-  // 4th~7th byte (Root Delay)
-  for (int i = 0; i < 4; i++){
-    payloadBuffer[4+i] = uint8_t(0);
-  }
-
-  // 8th~11th byte (Root Dispersion)
-  for (int i = 0; i < 4; i++){
-    payloadBuffer[8+i] = uint8_t(0);
-  }
-  
-  // 12th~15th byte (Reference ID)
-  char ReferenceID[] = "GNSS";
-  Serial.print("ReferenceID: ");
-  for(int i = 0; i < 4; i++){
-    Serial.print(uint8_t(ReferenceID[i]));
-    payloadBuffer[12+i] = uint8_t(ReferenceID[i]);
+  Serial.print("resPacket: ");
+  int resPacketSize = sizeof(resPacketBuffer);
+  for(int i=0;i<resPacketSize;i++){
+    wifiUdp.write(resPacketBuffer[i]);
+    Serial.print(resPacketBuffer[i], HEX);
     Serial.print(" ");
   }
   Serial.println("");
 
-  // 16th~23th byte (Reference Timestamp)
-  Serial.print("referenceTimestamp: ");
-  Serial.println((long)referenceTimestamp);
-  Serial.print("referenceTimestamp(NTP time): ");
-  Serial.println((long)referenceTimestamp- NtpUnixTimeDelta);
-  payloadBuffer[16] = uint8_t((long)referenceTimestamp - NtpUnixTimeDelta);
-  
-  // 24th~31th byte (Origin Timestamp) NTP リクエストのTransmit Timestamp
-  for (int i = 0; i < 7; i++){
-    payloadBuffer[24+i] = packetBuffer[40+i];
-  }
+  //wifiUdp.write("from ESP8266\r\n");
+  wifiUdp.endPacket();
 
-  // 32th~39th byte (Receive Timestamp)
-  Serial.print("receivedTimestamp: ");
-  Serial.println(uint8_t((long)receivedTimestamp - NtpUnixTimeDelta));
-  payloadBuffer[32] = uint8_t((long)receivedTimestamp - NtpUnixTimeDelta);
-
-  // 40th~48th byte (Transmit Timestamp)
-  for (int i = 0; i < 4; i++){
-    payloadBuffer[8+i] = uint8_t(0);
-  }
-  
+  Serial.println("finished!");
   Serial.println("");
 
-  // 送信データの処理
-  wifiUdp.beginPacket(remoteUdpIp, remoteUdpPort);
+}
+
+
+
+void createResPacket(double receivedTimeStamp){
+  memset(resPacketBuffer, 0, sizeof(resPacketBuffer));
+
+  // 0th byte (LI, VN, Mode)
+  uint8_t reqPacketFirstByte = reqPacketBuffer[0];
+  int vn = (reqPacketFirstByte >> 3) & B0000111; // Version Number の取得(3~4bit)
+  int li = 0;   // 0で固定 (0~1bit)
+  int mode = 4; // 4で固定 (5~7bit)
+  resPacketBuffer[0] = uint8_t(li+(vn<<3)+mode);
+
+  // 1st byte (Stratum)
+  resPacketBuffer[1] = uint8_t(1);
+
+  // 2nd byte (Polling)
+  resPacketBuffer[2] = uint8_t(6);
+
+  // 3rd byte (Precision)
+  resPacketBuffer[3] = int8_t(-12);
+
+  // 4th~7th byte (Root Delay)
+  for (int i = 0; i < 4; i++){
+    resPacketBuffer[4+i] = uint8_t(0);
+  }
+
+  // 8th~11th byte (Root Dispersion)
+  for (int i = 0; i < 4; i++){
+    resPacketBuffer[8+i] = uint8_t(0);
+  }
+  
+  // 12th~15th byte (Reference ID)
+  char ReferenceID[] = "GNSS";
+  memcpy(resPacketBuffer+12,ReferenceID,4);
+
+  // 16th~23th byte (Reference Timestamp)
+  Serial.print("referenceTimestamp: ");
+  Serial.println(referenceTimestamp);
+
+  double referenceTimestampNTP = referenceTimestamp + NtpUnixTimeDelta;
+  Serial.print("referenceTimestamp(NTP time): ");
+  Serial.println(referenceTimestampNTP); // unix time to ntp time
+  uint32_t referenceTimestampIntPart = round(referenceTimestampNTP);
+  referenceTimestampIntPart = htonl(referenceTimestampIntPart); // リトルエンディアンだからビット順反転
+  // ここ便宜的(小数部はデタラメ)
+  String referenceTimestampFlacPartString = String(referenceTimestampNTP - (int)referenceTimestampNTP);
+  uint32_t referenceTimestampFlacPart = uint32_t(referenceTimestampFlacPartString.substring(2).toInt());
+  referenceTimestampFlacPart = htonl(referenceTimestampFlacPart); // リトルエンディアンだからビット順反転
+
+  memcpy(resPacketBuffer+16, &referenceTimestampIntPart, sizeof(referenceTimestampIntPart));
+  memcpy(resPacketBuffer+20, &referenceTimestampFlacPart, sizeof(referenceTimestampFlacPart));
+
+  // 24th~31th byte (Origin Timestamp) NTP リクエストのTransmit Timestamp
+  // リクエストパケットの40~47バイトをresPacketの24~31バイトにコピー
+  memcpy(resPacketBuffer+24,reqPacketBuffer+40,8);
+
+  // 32th~39th byte (Receive Timestamp)
+  double receivedTimeStampNTP = receivedTimeStamp + NtpUnixTimeDelta;
+  uint32_t receivedTimeStampNTPIntPart = round(receivedTimeStampNTP);
+  receivedTimeStampNTPIntPart = htonl(receivedTimeStampNTPIntPart); // リトルエンディアンだからビット順反転
+  // ここ便宜的(小数部はデタラメ)
+  String receivedTimeStampNTPFlacPartString = String(receivedTimeStampNTP - (int)receivedTimeStampNTP);
+  uint32_t receivedTimeStampNTPFlacPart = uint32_t(receivedTimeStampNTPFlacPartString.substring(2).toInt());
+  receivedTimeStampNTPFlacPart = htonl(receivedTimeStampNTPFlacPart); // リトルエンディアンだからビット順反転
+
+  memcpy(resPacketBuffer+32, &receivedTimeStampNTPIntPart, sizeof(receivedTimeStampNTPIntPart));
+  memcpy(resPacketBuffer+38, &receivedTimeStampNTPFlacPart, sizeof(receivedTimeStampNTPFlacPart));
+
+  // 40th~48th byte (Transmit Timestamp)
+  double unixTime = calcUnixTime();
+  Serial.print("Unixtime(UTC): ");
+  Serial.println(unixTime);
+  double unixTimeNTP = unixTime + NtpUnixTimeDelta;
+  uint32_t unixTimeNTPIntPart = round(unixTimeNTP);
+  unixTimeNTPIntPart = htonl(unixTimeNTPIntPart); // リトルエンディアンだからビット順反転
+  // ここ便宜的(小数部はデタラメ)
+  String unixTimeNTPFlacPartString = String(unixTimeNTP - (int)unixTimeNTP);
+  uint32_t unixTimeNTPFlacPart = uint32_t(unixTimeNTPFlacPartString.substring(2).toInt());
+  unixTimeNTPFlacPart = htonl(unixTimeNTPFlacPart); // リトルエンディアンだからビット順反転
+
+  memcpy(resPacketBuffer+40, &unixTimeNTPIntPart, sizeof(unixTimeNTPIntPart));
+  memcpy(resPacketBuffer+44, &unixTimeNTPFlacPart, sizeof(unixTimeNTPFlacPart));
+}
+
+double calcUnixTime(){
+  // TODO PPSでUnixTIMEを取得できるまでの便宜的措置
+  double Unixtime;
   while(1){
     if (mySerial.available()) {
       String serialStr = mySerial.readStringUntil('\n');
-      Serial.println(serialStr);
-      //wifiUdp.print(serialStr);
-      if(serialStr.substring(3,6)=="ZDA"){
+      if(serialStr.substring(0, 6) == "$GPRMC"){
+        Serial.print("NMEA Code: ");
+        Serial.println(serialStr);
+        int timePosStart = serialStr.indexOf(",")+1;
+        int timePosEnd = serialStr.indexOf(",",timePosStart);
+        String UTCTime = serialStr.substring(timePosStart, timePosEnd+1);
+        Serial.print("UTCTime: ");
+        Serial.println(UTCTime);
+        double hours = UTCTime.substring(0, 2).toFloat();
+        double minutes = UTCTime.substring(2, 4).toFloat();
+        double seconds = UTCTime.substring(4).toFloat();
+        double TodaysUTCTimeSec = hours*3600+minutes*60+seconds;
+        
+        int dateStartPos = 0;
+        for(int i=0;i<9;i++){
+          dateStartPos = serialStr.indexOf(",",dateStartPos)+1;
+        }
+        int dateEndPos = serialStr.indexOf(",",dateStartPos);
+        String UTCDate = serialStr.substring(dateStartPos, dateEndPos);
+        Serial.print("UTCDate: ");
+        Serial.println(UTCDate);
+        int day = UTCDate.substring(0, 2).toInt();
+        int month = UTCDate.substring(2, 4).toInt();
+        int year = UTCDate.substring(4).toInt()+2000;
+        Serial.print("day: ");
+        Serial.print(day);
+        Serial.print(" month: ");
+        Serial.print(month);
+        Serial.print(" year: ");
+        Serial.print(year);
+
+        Serial.print(" h: ");
+        Serial.print(hours);
+        Serial.print(" m: ");
+        Serial.print(minutes);
+        Serial.print(" s: ");
+        Serial.println(seconds);
+        Serial.print("TodaysUTCTime(sec): ");
+        Serial.println(TodaysUTCTimeSec);
+
+        struct tm tm = {
+          0, 0, 0, // sec,min,hour
+          day,
+          month-1,
+          year-1900,
+        };
+        double unixDate = mktime(&tm);
+
+        Serial.print("Unix time untile today midnight: ");
+        Serial.println(unixDate);
+
+        Unixtime = unixDate + TodaysUTCTimeSec + 3600*9;
+
         break;
       }
     }
   }
-
-  int payloadSize = sizeof(payloadBuffer);
-  for(int i=0;i<payloadSize;i++){
-    wifiUdp.write(payloadBuffer[i]);
-    Serial.print(payloadBuffer[i], HEX);
-  }
-  wifiUdp.write("from ESP8266\r\n");
-  wifiUdp.endPacket();
+  return Unixtime;
 }
