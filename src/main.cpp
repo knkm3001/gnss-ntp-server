@@ -6,6 +6,7 @@
 #include <string>
 #include "wifiConfig.h"
 
+
 #define JST 3600*9
 
 static WiFiUDP wifiUdp;
@@ -95,8 +96,6 @@ void loop() {
   // リクエストデータの表示
   Serial.println("reqPacket received!");
   double receivedTimeStamp = time(NULL);
-  Serial.print("receivedTimestamp: ");
-  Serial.println(receivedTimeStamp);
 
   IPAddress remoteUdpIp = wifiUdp.remoteIP();
   Serial.print("ip from: ");
@@ -107,8 +106,6 @@ void loop() {
   Serial.println(reqPacketSize);
   memset(reqPacketBuffer, 0, sizeof(reqPacketBuffer));
   int bufferSize = wifiUdp.read(reqPacketBuffer, 255);
-  Serial.print("bufferSize: ");
-  Serial.println(bufferSize);
 
   // パケットのUDPデータ部分を表示
   Serial.print("reqPacket resPacket: ");
@@ -119,11 +116,11 @@ void loop() {
   }
   Serial.println("");
 
+  // レスポンス用のパケット作成
   createResPacket(receivedTimeStamp);
 
   // 送信データの処理
   wifiUdp.beginPacket(remoteUdpIp, wifiUdp.remotePort());
-
   Serial.print("resPacket: ");
   int resPacketSize = sizeof(resPacketBuffer);
   for(int i=0;i<resPacketSize;i++){
@@ -177,12 +174,7 @@ void createResPacket(double receivedTimeStamp){
   memcpy(resPacketBuffer+12,ReferenceID,4);
 
   // 16th~23th byte (Reference Timestamp)
-  Serial.print("referenceTimestamp: ");
-  Serial.println(referenceTimestamp);
-
   double referenceTimestampNTP = referenceTimestamp + NtpUnixTimeDelta;
-  Serial.print("referenceTimestamp(NTP time): ");
-  Serial.println(referenceTimestampNTP); // unix time to ntp time
   uint32_t referenceTimestampIntPart = round(referenceTimestampNTP);
   referenceTimestampIntPart = htonl(referenceTimestampIntPart); // リトルエンディアンだからビット順反転
   // ここ便宜的(小数部はデタラメ)
@@ -211,9 +203,11 @@ void createResPacket(double receivedTimeStamp){
 
   // 40th~48th byte (Transmit Timestamp)
   double unixTime = calcUnixTime();
-  Serial.print("Unixtime(UTC): ");
-  Serial.println(unixTime);
   double unixTimeNTP = unixTime + NtpUnixTimeDelta;
+  Serial.print("UnixTime(UTC): ");
+  Serial.println(unixTime);
+  Serial.print("NtpTime(UTC): ");
+  Serial.println(unixTimeNTP);
   uint32_t unixTimeNTPIntPart = round(unixTimeNTP);
   unixTimeNTPIntPart = htonl(unixTimeNTPIntPart); // リトルエンディアンだからビット順反転
   // ここ便宜的(小数部はデタラメ)
@@ -237,8 +231,8 @@ double calcUnixTime(){
         int timePosStart = serialStr.indexOf(",")+1;
         int timePosEnd = serialStr.indexOf(",",timePosStart);
         String UTCTime = serialStr.substring(timePosStart, timePosEnd+1);
-        Serial.print("UTCTime: ");
-        Serial.println(UTCTime);
+        //Serial.print("UTCTime: ");
+        //Serial.println(UTCTime);
         double hours = UTCTime.substring(0, 2).toFloat();
         double minutes = UTCTime.substring(2, 4).toFloat();
         double seconds = UTCTime.substring(4).toFloat();
@@ -250,26 +244,26 @@ double calcUnixTime(){
         }
         int dateEndPos = serialStr.indexOf(",",dateStartPos);
         String UTCDate = serialStr.substring(dateStartPos, dateEndPos);
-        Serial.print("UTCDate: ");
-        Serial.println(UTCDate);
         int day = UTCDate.substring(0, 2).toInt();
         int month = UTCDate.substring(2, 4).toInt();
         int year = UTCDate.substring(4).toInt()+2000;
-        Serial.print("day: ");
-        Serial.print(day);
-        Serial.print(" month: ");
-        Serial.print(month);
-        Serial.print(" year: ");
-        Serial.print(year);
 
-        Serial.print(" h: ");
-        Serial.print(hours);
-        Serial.print(" m: ");
-        Serial.print(minutes);
-        Serial.print(" s: ");
-        Serial.println(seconds);
-        Serial.print("TodaysUTCTime(sec): ");
-        Serial.println(TodaysUTCTimeSec);
+        String h = String((int)hours).length() ==1 ? "0"+String((int)hours) : String((int)hours);
+        String m = String((int)minutes).length() ==1 ? "0"+String((int)minutes) : String((int)minutes);
+        String s = String((int)seconds).length() ==1 ? "0"+String((int)seconds) : String((int)seconds);
+
+        Serial.print(year);
+        Serial.print("/");
+        Serial.print(month);
+        Serial.print("/");
+        Serial.print(day);
+        Serial.print("T");
+        Serial.print(h);
+        Serial.print(":");
+        Serial.print(m);
+        Serial.print(":");
+        Serial.print(s);
+        Serial.println(" UTC");
 
         struct tm tm = {
           0, 0, 0, // sec,min,hour
@@ -277,10 +271,7 @@ double calcUnixTime(){
           month-1,
           year-1900,
         };
-        double unixDate = mktime(&tm);
-
-        Serial.print("Unix time untile today midnight: ");
-        Serial.println(unixDate);
+        double unixDate = mktime(&tm);;
 
         Unixtime = unixDate + TodaysUTCTimeSec + 3600*9;
 
