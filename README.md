@@ -25,7 +25,10 @@ NICT(情報通信研究機構 NTP ip:133.243.238.244)と比較すると精度は
 ## TODO
 - PPSを用いて受信機とESPの時刻同期を行い精度向上させる。
 - 現状、時刻の小数部分はデタラメなところがあるので改善する(PPSを使えばなおる？)
-- 現状とりあえずGPSのみの電波を拾っているので"みちびき"にも対応させる。
+- とりあえずGPSのみの電波を拾っているので"みちびき"にも対応させる。
 - ソースコードもっといい感じにする。
 
+## 参考
+- [GPSと仲良くなってNTPサーバを作ろう](https://booth.pm/ja/items/1310612)
+- [GPSのNMEAフォーマット](https://www.hiramine.com/physicalcomputing/general/gps_nmeaformat.html)
 
